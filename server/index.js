@@ -15,31 +15,8 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
-app.get("/", (req, res) => {
-  res.send("Hello from the server!");
-});
 
-app.post("/api/chat", async (req, res) => {
-  try {
-    const { question } = req.body;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: question,
-    });
-
-    res.json({
-      answer: response.text,
-    });
-  } catch (error) {
-  console.error("GEMINI ERROR:", error);
-
-  res.status(500).json({
-    error: error.message,
-  });
-}
-});
-
+//api-endpoints
 app.post("/api/video", async (req, res) => {
   try {
     const { youtubeUrl } = req.body;
@@ -99,22 +76,22 @@ app.post("/api/video", async (req, res) => {
   }
 });
 
-app.get("/api/db-test", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT NOW()");
+// app.get("/api/db-test", async (req, res) => {
+//   try {
+//     const result = await pool.query("SELECT NOW()");
 
-    res.json({
-      message: "Database connected!",
-      time: result.rows[0],
-    });
-  } catch (error) {
-    console.error("DATABASE ERROR:", error);
+//     res.json({
+//       message: "Database connected!",
+//       time: result.rows[0],
+//     });
+//   } catch (error) {
+//     console.error("DATABASE ERROR:", error);
 
-    res.status(500).json({
-      error: error.message,
-    });
-  }
-});
+//     res.status(500).json({
+//       error: error.message,
+//     });
+//   }
+// });
 
 
 //NOW COMES THE MOST IMPORTANT PART ->
@@ -178,6 +155,96 @@ app.post("/api/search", async (req, res) => {
   }
 });
 
+//  COMPLETE FLOW OF OUR RAG (RETRIEVAL-AUGMENTED GENERATION) APPLICATION:
+// YouTube URL
+//      ↓
+// Transcript
+//      ↓
+// Split into chunks
+//      ↓
+// Gemini Embeddings
+//      ↓
+// PostgreSQL + pgvector
+//      ↓
+//         USER QUESTION
+//              ↓
+//       Gemini embedding
+//              ↓
+//       pgvector similarity
+//              ↓
+//        Top 5 chunks
+//              ↓
+//        Context + Question
+//              ↓
+//           Gemini
+//              ↓
+//            Answer
+
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { question, videoId } = req.body;
+
+    // 1. Embed the question
+    const embeddingResponse = await ai.models.embedContent({
+      model: "gemini-embedding-001",
+      contents: question,
+    });
+
+    const questionEmbedding =
+      embeddingResponse.embeddings[0].values;
+
+    // 2. Retrieve relevant chunks
+    const result = await pool.query(
+      `
+      SELECT content, embedding <=> $1::vector AS distance
+      FROM documents
+      WHERE video_id = $2
+      ORDER BY embedding <=> $1::vector
+      LIMIT 5
+      `,
+      [
+        JSON.stringify(questionEmbedding),
+        videoId,
+      ]
+    );
+
+    const context = result.rows
+      .map((row) => row.content)
+      .join("\n\n");
+
+    // 3. Ask Gemini using retrieved context
+    const prompt = `
+You are an assistant that answers questions about a YouTube video.
+
+Use ONLY the transcript context provided below.
+
+If the answer is not present in the context, say:
+"I couldn't find that information in the video."
+
+Transcript context:
+${context}
+
+Question:
+${question}
+`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: prompt,
+    });
+
+    res.json({
+      answer: response.text,
+    });
+
+  } catch (error) {
+    console.error("RAG ERROR:", error);
+
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
 
 app.listen(3000, () => {
   console.log("Server running on http://localhost:3000");
