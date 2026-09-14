@@ -116,6 +116,69 @@ app.get("/api/db-test", async (req, res) => {
   }
 });
 
+
+//NOW COMES THE MOST IMPORTANT PART ->
+
+// Question
+//    ↓
+// Gemini embedding
+//    ↓
+// question vector
+//    ↓
+// compare against vectors in PostgreSQL
+//    ↓
+// find closest chunks
+//    ↓
+// return top 3/5 chunks
+//    ↓
+// Gemini receives those chunks
+//    ↓
+// answer
+
+// This is the retrieval part of RAG (Retrieval-Augmented Generation)
+
+app.post("/api/search", async (req, res) => {
+  try {
+    const { question, videoId } = req.body;
+
+    const embeddingResponse = await ai.models.embedContent({
+      model: "gemini-embedding-001",
+      contents: question,
+    });
+
+    const questionEmbedding =
+      embeddingResponse.embeddings[0].values;
+
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        content,
+        embedding <=> $1 AS distance
+      FROM documents
+      WHERE video_id = $2
+      ORDER BY embedding <=> $1
+      LIMIT 5
+      `,
+      [
+        JSON.stringify(questionEmbedding),
+        videoId,
+      ]
+    );
+
+    res.json({
+      results: result.rows,
+    });
+  } catch (error) {
+    console.error("SEARCH ERROR:", error);
+
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
+
 app.listen(3000, () => {
   console.log("Server running on http://localhost:3000");
 });
