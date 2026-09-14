@@ -4,6 +4,7 @@ import cors from "cors";
 import { GoogleGenAI } from "@google/genai";
 import { fetchTranscript } from "youtube-transcript";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import pool from "./db.js";
 
 const app = express();
 
@@ -71,11 +72,23 @@ app.post("/api/video", async (req, res) => {
 
     const embeddings = embeddingResponse.embeddings;
 
-    console.log(embeddings[0]);
+    for (let i = 0; i < chunks.length; i++) {
+      await pool.query(
+        `
+        INSERT INTO documents (video_id, content, embedding)
+        VALUES ($1, $2, $3)
+        `,
+        [
+          videoId,
+          chunks[i].pageContent,
+          JSON.stringify(embeddings[i].values),
+        ]
+      );
+    }
 
     res.json({
+      message: "Video processed and stored successfully",
       numberOfChunks: chunks.length,
-      firstEmbedding: embeddings[0],
     });
   } catch (error) {
     console.error("VIDEO ERROR:", error);
@@ -86,6 +99,24 @@ app.post("/api/video", async (req, res) => {
   }
 });
 
+app.get("/api/db-test", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT NOW()");
+
+    res.json({
+      message: "Database connected!",
+      time: result.rows[0],
+    });
+  } catch (error) {
+    console.error("DATABASE ERROR:", error);
+
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
 app.listen(3000, () => {
   console.log("Server running on http://localhost:3000");
 });
+
