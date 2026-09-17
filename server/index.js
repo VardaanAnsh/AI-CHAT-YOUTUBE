@@ -15,6 +15,35 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+
+const sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+async function withRetry(fn, retries = 2) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const retryableStatuses = [500, 502, 503, 504];
+      const status = error.status ?? error.code;
+
+      if (
+        !retryableStatuses.includes(Number(status)) ||
+        attempt >= retries
+      ) {
+        throw error;
+      }
+
+      const delay = 1000 * 2 ** attempt;
+
+      console.log(
+        `Gemini failed. Retrying in ${delay}ms...`
+      );
+
+      await sleep(delay);
+    }
+  }
+}
 //endpoint to get the title of video from youtube url for storing in the database
 
 async function fetchVideoTitle(youtubeUrl) {
@@ -215,25 +244,6 @@ app.post("/api/video", async (req, res) => {
     });
   }
 });
-
-// app.get("/api/db-test", async (req, res) => {
-//   try {
-//     const result = await pool.query("SELECT NOW()");
-
-//     res.json({
-//       message: "Database connected!",
-//       time: result.rows[0],
-//     });
-//   } catch (error) {
-//     console.error("DATABASE ERROR:", error);
-
-//     res.status(500).json({
-//       error: error.message,
-//     });
-//   }
-// });
-
-
 //NOW COMES THE MOST IMPORTANT PART ->
 
 // Question
@@ -254,46 +264,7 @@ app.post("/api/video", async (req, res) => {
 
 // This is the retrieval part of RAG (Retrieval-Augmented Generation)
 
-app.post("/api/search", async (req, res) => {
-  try {
-    const { question, videoId } = req.body;
 
-    const embeddingResponse = await ai.models.embedContent({
-      model: "gemini-embedding-001",
-      contents: question,
-    });
-
-    const questionEmbedding =
-      embeddingResponse.embeddings[0].values;
-
-    const result = await pool.query(
-      `
-      SELECT
-        id,
-        content,
-        embedding <=> $1 AS distance
-      FROM documents
-      WHERE video_id = $2
-      ORDER BY embedding <=> $1
-      LIMIT 5
-      `,
-      [
-        JSON.stringify(questionEmbedding),
-        videoId,
-      ]
-    );
-
-    res.json({
-      results: result.rows,
-    });
-  } catch (error) {
-    console.error("SEARCH ERROR:", error);
-
-    res.status(500).json({
-      error: error.message,
-    });
-  }
-});
 
 //  COMPLETE FLOW OF OUR RAG (RETRIEVAL-AUGMENTED GENERATION) APPLICATION:
 // YouTube URL
@@ -325,10 +296,13 @@ app.post("/api/chat", async (req, res) => {
     const { question, videoId } = req.body;
 
     // 1. Embed the question
-    const embeddingResponse = await ai.models.embedContent({
-      model: "gemini-embedding-001",
-      contents: question,
-    });
+    // Retry Gemini embedding failures
+    const embeddingResponse = await withRetry(() =>
+      ai.models.embedContent({
+        model: "gemini-embedding-001",
+        contents: question,
+      })
+    );
 
     const questionEmbedding =
       embeddingResponse.embeddings[0].values;
@@ -368,10 +342,13 @@ Question:
 ${question}
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-    });
+    
+    const response = await withRetry(() =>
+      ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+      })
+    );
 
     res.json({
       answer: response.text,
