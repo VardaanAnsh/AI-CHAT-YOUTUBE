@@ -113,7 +113,26 @@ app.post("/api/video", async (req, res) => {
     }
     const title = await fetchVideoTitle(youtubeUrl);
 
-    const transcript = await fetchTranscript(videoId);
+        
+    let transcript;
+
+    try {
+      transcript = await fetchTranscript(videoId);
+    } catch (error) {
+      console.error("Transcript fetch failed:", error);
+
+      return res.status(400).json({
+        message:
+          "Could not fetch the transcript. The video may have captions disabled or unavailable.",
+      });
+    }
+
+    
+    if (!transcript || transcript.length === 0) {
+      return res.status(400).json({
+        message: "No transcript is available for this video.",
+      });
+    }
 
     const text = transcript
       .map((item) => item.text)
@@ -359,11 +378,11 @@ ${question}
     });
 
   } catch (error) {
-    console.error("RAG ERROR:", error);
+    console.error("Chat API error:", error);
 
-    res.status(500).json({
-      error: error.message,
-    });
+    return res.status(500).json({
+    message: "Sorry, something went wrong while generating the answer. Please try again.",
+  });
   }
 });
 
