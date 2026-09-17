@@ -60,6 +60,12 @@ function App() {
   const loadVideo = async () => {
     if (loadingVideo) return;
 
+        
+    // if (data.alreadyProcessed) {
+    //   setVideoStatus("This video has already been processed.");
+    //   return;
+    // }
+
     const id = extractVideoId(youtubeUrl);
 
     if (!id) {
@@ -89,6 +95,25 @@ function App() {
       );
 
       const data = await response.json();
+
+          
+              
+      if (data.alreadyProcessed) {
+        setVideoId(id); // Enable chat for this video
+
+        setVideoStatus({
+          type: "success",
+          message: "This video has already been processed. Ready to chat!",
+        });
+
+        setMessages([]);
+        setChatError("");
+        setQuestion("");
+
+        questionInputRef.current?.focus();
+
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(

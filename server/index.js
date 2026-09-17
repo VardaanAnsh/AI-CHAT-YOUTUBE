@@ -15,13 +15,67 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+//endpoint to get the title of video from youtube url for storing in the database
+
+async function fetchVideoTitle(youtubeUrl) {
+  const oEmbedUrl = new URL(
+    "https://www.youtube.com/oembed"
+  );
+
+  oEmbedUrl.searchParams.set("url", youtubeUrl);
+  oEmbedUrl.searchParams.set("format", "json");
+
+  const response = await fetch(oEmbedUrl);
+
+  if (!response.ok) {
+    throw new Error("Unable to fetch YouTube video metadata.");
+  }
+
+  const data = await response.json();
+
+  return data.title;
+}
 
 //api-endpoints
+// I separated video-level metadata from transcript chunks.
+// The videos table stores one record per YouTube video,
+// while documents stores multiple transcript chunks and their vector embeddings.
+// The video ID acts as the primary key for metadata, 
+// and I use an upsert to update an existing video's metadata
+// rather than creating duplicate metadata records.
 app.post("/api/video", async (req, res) => {
   try {
+    
     const { youtubeUrl } = req.body;
 
-    const videoId = new URL(youtubeUrl).searchParams.get("v");
+    if (!youtubeUrl) {
+      return res.status(400).json({
+        error: "YouTube URL is required",
+      });
+    }
+
+    const parsedUrl = new URL(youtubeUrl);
+    const videoId = parsedUrl.searchParams.get("v");
+
+    if (!videoId) {
+      return res.status(400).json({
+        error: "Invalid YouTube URL",
+      });
+    }
+    
+    const existingVideo = await pool.query(
+      "SELECT video_id FROM videos WHERE video_id = $1",
+      [videoId]
+    );
+
+    if (existingVideo.rows.length > 0) {
+      return res.status(200).json({
+        message: "Video already processed",
+        alreadyProcessed: true,
+        videoId
+      });
+    }
+    const title = await fetchVideoTitle(youtubeUrl);
 
     if (!videoId) {
       return res.status(400).json({
@@ -62,11 +116,26 @@ app.post("/api/video", async (req, res) => {
         ]
       );
     }
-
+    
+    await pool.query(
+      `
+      INSERT INTO videos (video_id, title, chunk_count)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (video_id)
+      DO UPDATE SET
+        title = EXCLUDED.title,
+        chunk_count = EXCLUDED.chunk_count
+      `,
+      [videoId, title, chunks.length]
+    );
+    
     res.json({
       message: "Video processed and stored successfully",
+      videoId,
+      title,
       numberOfChunks: chunks.length,
     });
+
   } catch (error) {
     console.error("VIDEO ERROR:", error);
 
