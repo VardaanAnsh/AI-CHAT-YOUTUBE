@@ -103,31 +103,53 @@ app.post("/api/video", async (req, res) => {
 
     const embeddings = embeddingResponse.embeddings;
 
-    for (let i = 0; i < chunks.length; i++) {
-      await pool.query(
-        `
-        INSERT INTO documents (video_id, content, embedding)
-        VALUES ($1, $2, $3)
-        `,
-        [
-          videoId,
-          chunks[i].pageContent,
-          JSON.stringify(embeddings[i].values),
-        ]
-      );
-    }
     
-    await pool.query(
-      `
-      INSERT INTO videos (video_id, title, chunk_count)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (video_id)
-      DO UPDATE SET
-        title = EXCLUDED.title,
-        chunk_count = EXCLUDED.chunk_count
-      `,
-      [videoId, title, chunks.length]
-    );
+    const client = await pool.connect();
+
+    try {
+      // Start a database transaction
+      await client.query("BEGIN");
+
+      // Insert all transcript chunks
+      for (let i = 0; i < chunks.length; i++) {
+        await client.query(
+          `
+          INSERT INTO documents (video_id, content, embedding)
+          VALUES ($1, $2, $3)
+          `,
+          [
+            videoId,
+            chunks[i].pageContent,
+            JSON.stringify(embeddings[i].values),
+          ]
+        );
+      }
+
+      // Insert or update video metadata
+      await client.query(
+        `
+        INSERT INTO videos (video_id, title, chunk_count)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (video_id)
+        DO UPDATE SET
+          title = EXCLUDED.title,
+          chunk_count = EXCLUDED.chunk_count
+        `,
+        [videoId, title, chunks.length]
+      );
+
+      // Save all database changes together
+      await client.query("COMMIT");
+
+    } catch (error) {
+      // Undo database changes if anything failed
+      await client.query("ROLLBACK");
+      throw error;
+
+    } finally {
+      // Always release the database connection
+      client.release();
+    }
     
     res.json({
       message: "Video processed and stored successfully",
