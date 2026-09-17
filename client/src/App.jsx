@@ -1,81 +1,208 @@
-import { useState } from "react";
+
+import { useState, useEffect, useRef } from "react";
 import "./App.css";
 
 function App() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [question, setQuestion] = useState("");
-  const [messages,setMessages] = useState([]);
-  const [videoId, setVideoId] = useState("iRXx1x7q7ac");
+  const [messages, setMessages] = useState([]);
+  const [videoId, setVideoId] = useState("");
+
   const [loadingVideo, setLoadingVideo] = useState(false);
+  const [loadingChat, setLoadingChat] = useState(false);
+
+  const [videoStatus, setVideoStatus] = useState(null);
+  const [chatError, setChatError] = useState("");
+
+  const messagesEndRef = useRef(null);
+  const questionInputRef = useRef(null);
+
+  // Keep the latest message visible.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+    });
+  }, [messages, loadingChat]);
+
+  const extractVideoId = (url) => {
+    try {
+      const parsedUrl = new URL(url.trim());
+
+      if (
+        parsedUrl.hostname === "youtu.be" ||
+        parsedUrl.hostname === "www.youtu.be"
+      ) {
+        return parsedUrl.pathname.split("/")[1] || null;
+      }
+
+      if (
+        parsedUrl.hostname === "youtube.com" ||
+        parsedUrl.hostname === "www.youtube.com" ||
+        parsedUrl.hostname === "m.youtube.com"
+      ) {
+        if (parsedUrl.pathname === "/watch") {
+          return parsedUrl.searchParams.get("v");
+        }
+
+        const parts = parsedUrl.pathname.split("/").filter(Boolean);
+
+        if (["shorts", "embed", "live"].includes(parts[0])) {
+          return parts[1] || null;
+        }
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  };
 
   const loadVideo = async () => {
-  try {
-    setLoadingVideo(true);
+    if (loadingVideo) return;
 
-    const response = await fetch("http://localhost:3000/api/video", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        youtubeUrl,
-      }),
-    });
+    const id = extractVideoId(youtubeUrl);
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error);
+    if (!id) {
+      setVideoStatus({
+        type: "error",
+        message: "Please enter a valid YouTube video URL.",
+      });
+      return;
     }
 
-    const id = new URL(youtubeUrl).searchParams.get("v");
+    try {
+      setLoadingVideo(true);
+      setVideoStatus({
+        type: "loading",
+        message: "Processing video and storing transcript...",
+      });
 
-    setVideoId(id);
+      const response = await fetch(
+        "http://localhost:3000/api/video",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ youtubeUrl }),
+        }
+      );
 
-    console.log("Video loaded:", data);
-  } catch (error) {
-    console.error("LOAD VIDEO ERROR:", error);
-  } finally {
-    setLoadingVideo(false);
-  }
-};
+      const data = await response.json();
 
-const askQuestion = async () => {
-  if (!question.trim() || !videoId) return;
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Unable to process this video."
+        );
+      }
 
-  try {
-    const response = await fetch("http://localhost:3000/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        question,
-        videoId,
-      }),
-    });
+      setVideoId(id);
 
-    const data = await response.json();
+      setVideoStatus({
+        type: "success",
+        message: "Video processed successfully!",
+        numberOfChunks: data.numberOfChunks,
+      });
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: question,
-      },
-      {
-        role: "assistant",
-        content: data.answer,
-      },
-    ]);
+      setMessages([]);
+      setChatError("");
+      setQuestion("");
 
+      // Focus the chat input after successful ingestion.
+      questionInputRef.current?.focus();
+    } catch (error) {
+      console.error("LOAD VIDEO ERROR:", error);
+
+      setVideoStatus({
+        type: "error",
+        message: error.message || "Something went wrong.",
+      });
+    } finally {
+      setLoadingVideo(false);
+    }
+  };
+
+  const askQuestion = async (event) => {
+    event?.preventDefault();
+
+    const trimmedQuestion = question.trim();
+
+    if (!trimmedQuestion || !videoId || loadingChat) {
+      return;
+    }
+
+    // Display the user's message immediately.
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmedQuestion,
+    };
+
+    setMessages((previous) => [...previous, userMessage]);
     setQuestion("");
-  } catch (error) {
-    console.error("CHAT ERROR:", error);
-  }
-};
+    setChatError("");
+    setLoadingChat(true);
 
+    try {
+      const response = await fetch(
+        "http://localhost:3000/api/chat",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            question: trimmedQuestion,
+            videoId,
+          }),
+        }
+      );
 
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Unable to get a response."
+        );
+      }
+
+      if (!data.answer) {
+        throw new Error("The server returned an empty answer.");
+      }
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: data.answer,
+        },
+      ]);
+    } catch (error) {
+      console.error("CHAT ERROR:", error);
+
+      setChatError(
+        error.message || "Something went wrong. Please try again."
+      );
+    } finally {
+      setLoadingChat(false);
+      questionInputRef.current?.focus();
+    }
+  };
+
+  const startNewChat = () => {
+    setMessages([]);
+    setQuestion("");
+    setChatError("");
+    questionInputRef.current?.focus();
+  };
+
+  const handleQuestionKeyDown = (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      askQuestion();
+    }
+  };
 
   return (
     <div className="app">
@@ -85,81 +212,232 @@ const askQuestion = async () => {
           <span>AI YouTube Chat</span>
         </div>
 
-        <button className="new-chat">+ New Chat</button>
+        <button
+          className="new-chat"
+          onClick={startNewChat}
+          disabled={messages.length === 0 && !chatError}
+        >
+          + New Chat
+        </button>
       </header>
 
       <main className="chat-container">
         <section className="hero">
-          <div className="hero-icon">🎥</div>
+          <div className="hero-label">YOUTUBE • RAG CHAT</div>
 
           <h1>Chat with any YouTube video</h1>
 
           <p>
-            Paste a YouTube video and ask questions about its content.
+            Load a video, then ask questions about its transcript.
           </p>
 
           <div className="youtube-input">
-            {/* <input
-              type="text"
-              placeholder="Paste YouTube URL..."
-              value={youtubeUrl}
-              onChange={(e) => setYoutubeUrl(e.target.value)}
-            /> */}
             <input
               type="text"
-              placeholder="Paste YouTube URL..."
+              placeholder="Paste a YouTube URL..."
               value={youtubeUrl}
-              onChange={(e) => {
-                console.log("TYPING:", e.target.value);
-                setYoutubeUrl(e.target.value);
+              onChange={(event) => {
+                setYoutubeUrl(event.target.value);
+                setVideoStatus(null);
               }}
-              onFocus={() => console.log("INPUT FOCUSED")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  loadVideo();
+                }
+              }}
             />
-            
-            <button onClick={loadVideo} disabled={loadingVideo}>
-              {loadingVideo ? "Loading..." : "Load Video"}
+
+            <button
+              onClick={loadVideo}
+              disabled={loadingVideo || !youtubeUrl.trim()}
+            >
+              {loadingVideo ? (
+                <>
+                  <span className="button-spinner" />
+                  Processing
+                </>
+              ) : (
+                "Load Video"
+              )}
             </button>
           </div>
+
+          {videoStatus && (
+            <div
+              className={`video-status ${videoStatus.type}`}
+              role="status"
+            >
+              {videoStatus.type === "loading" && (
+                <span className="status-spinner" />
+              )}
+
+              {videoStatus.type === "success" && (
+                <span className="status-icon">✓</span>
+              )}
+
+              {videoStatus.type === "error" && (
+                <span className="status-icon">!</span>
+              )}
+
+              <div>
+                <strong>{videoStatus.message}</strong>
+
+                {videoStatus.type === "success" &&
+                  videoStatus.numberOfChunks !== undefined && (
+                    <p>
+                      {videoStatus.numberOfChunks} transcript chunks
+                      processed.
+                    </p>
+                  )}
+              </div>
+            </div>
+          )}
         </section>
 
-        <div className="messages">
-  {messages.map((message, index) => (
-    <div
-      key={index}
-      className={`message ${
-        message.role === "user" ? "user-message" : "ai-message"
-      }`}
-    >
-      <div className="avatar">
-        {message.role === "user" ? "YOU" : "AI"}
-      </div>
+        <section className="chat-panel">
+          <div className="messages">
+            {messages.length === 0 && !loadingChat ? (
+              <div className="empty-chat">
+                <div className="empty-chat-icon">✦</div>
 
-      <div className="message-content">
-        <span className="message-name">
-          {message.role === "user" ? "You" : "AI Assistant"}
-        </span>
+                <h2>
+                  {videoId
+                    ? "Your video is ready"
+                    : "Start a conversation"}
+                </h2>
 
-        <p>{message.content}</p>
-      </div>
-    </div>
-  ))}
-</div>
+                <p>
+                  {videoId
+                    ? "Ask a question about the transcript below."
+                    : "Load a YouTube video above to begin chatting."}
+                </p>
 
-        <div className="question-box">
-          <input
-            type="text"
-            placeholder="Ask anything about the video..."
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                askQuestion();
+                {videoId && (
+                  <div className="suggested-questions">
+                    <button
+                      onClick={() =>
+                        setQuestion("What is this video about?")
+                      }
+                    >
+                      What is this video about?
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        setQuestion("Summarize the key ideas.")
+                      }
+                    >
+                      Summarize the key ideas
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`message ${
+                    message.role === "user"
+                      ? "user-message"
+                      : "ai-message"
+                  }`}
+                >
+                  {message.role === "assistant" && (
+                    <div className="avatar ai-avatar">✦</div>
+                  )}
+
+                  <div className="message-content">
+                    <div className="message-name">
+                      {message.role === "user" ? "You" : "AI Assistant"}
+                    </div>
+
+                    <p>{message.content}</p>
+                  </div>
+
+                  {message.role === "user" && (
+                    <div className="avatar user-avatar">Y</div>
+                  )}
+                </div>
+              ))
+            )}
+
+            {loadingChat && (
+              <div className="message ai-message">
+                <div className="avatar ai-avatar">✦</div>
+
+                <div className="message-content">
+                  <div className="message-name">AI Assistant</div>
+
+                  <div
+                    className="typing-indicator"
+                    aria-label="AI is generating a response"
+                  >
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+
+                  <span className="thinking-text">
+                    Thinking...
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {chatError && (
+              <div className="chat-error" role="alert">
+                <span>{chatError}</span>
+
+                <button
+                  onClick={() => {
+                    setChatError("");
+                    setQuestion(
+                      messages[messages.length - 1]?.content || ""
+                    );
+                  }}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          <form className="question-box" onSubmit={askQuestion}>
+            <textarea
+              ref={questionInputRef}
+              placeholder={
+                videoId
+                  ? "Ask anything about the video..."
+                  : "Load a video first..."
               }
-            }}
-          />
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={handleQuestionKeyDown}
+              disabled={!videoId || loadingChat}
+              rows={1}
+            />
 
-          <button onClick={askQuestion}>↑</button>
-        </div>
+            <button
+              type="submit"
+              disabled={
+                !videoId || !question.trim() || loadingChat
+              }
+              aria-label="Send message"
+            >
+              {loadingChat ? (
+                <span className="button-spinner" />
+              ) : (
+                "↑"
+              )}
+            </button>
+
+            <div className="input-hint">
+              Enter to send · Shift + Enter for a new line
+            </div>
+          </form>
+        </section>
       </main>
     </div>
   );
