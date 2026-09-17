@@ -108,6 +108,14 @@ input {
   outline: none;
   padding: 12px 14px;
   background: transparent;
+  color: #18181b;
+  caret-color: #18181b;
+  cursor: text;
+}
+
+.youtube-input input::placeholder {
+  color: #71717a;
+  opacity: 1;
 }
 
 .youtube-input button {

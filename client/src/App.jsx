@@ -5,10 +5,45 @@ function App() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [question, setQuestion] = useState("");
   const [messages,setMessages] = useState([]);
+  const [videoId, setVideoId] = useState("iRXx1x7q7ac");
+  const [loadingVideo, setLoadingVideo] = useState(false);
 
-  const askQuestion = async () => {
-    if (!question.trim()) return;
+  const loadVideo = async () => {
+  try {
+    setLoadingVideo(true);
 
+    const response = await fetch("http://localhost:3000/api/video", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        youtubeUrl,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error);
+    }
+
+    const id = new URL(youtubeUrl).searchParams.get("v");
+
+    setVideoId(id);
+
+    console.log("Video loaded:", data);
+  } catch (error) {
+    console.error("LOAD VIDEO ERROR:", error);
+  } finally {
+    setLoadingVideo(false);
+  }
+};
+
+const askQuestion = async () => {
+  if (!question.trim() || !videoId) return;
+
+  try {
     const response = await fetch("http://localhost:3000/api/chat", {
       method: "POST",
       headers: {
@@ -16,13 +51,14 @@ function App() {
       },
       body: JSON.stringify({
         question,
+        videoId,
       }),
     });
 
     const data = await response.json();
 
-    setMessages((previousMessages) => [
-      ...previousMessages,
+    setMessages((prev) => [
+      ...prev,
       {
         role: "user",
         content: question,
@@ -34,7 +70,12 @@ function App() {
     ]);
 
     setQuestion("");
-  };
+  } catch (error) {
+    console.error("CHAT ERROR:", error);
+  }
+};
+
+
 
   return (
     <div className="app">
@@ -58,15 +99,25 @@ function App() {
           </p>
 
           <div className="youtube-input">
-            <input
+            {/* <input
               type="text"
               placeholder="Paste YouTube URL..."
               value={youtubeUrl}
               onChange={(e) => setYoutubeUrl(e.target.value)}
+            /> */}
+            <input
+              type="text"
+              placeholder="Paste YouTube URL..."
+              value={youtubeUrl}
+              onChange={(e) => {
+                console.log("TYPING:", e.target.value);
+                setYoutubeUrl(e.target.value);
+              }}
+              onFocus={() => console.log("INPUT FOCUSED")}
             />
-
-            <button>
-              Load Video
+            
+            <button onClick={loadVideo} disabled={loadingVideo}>
+              {loadingVideo ? "Loading..." : "Load Video"}
             </button>
           </div>
         </section>
