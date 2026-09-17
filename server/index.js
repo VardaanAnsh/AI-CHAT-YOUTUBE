@@ -295,6 +295,22 @@ app.post("/api/chat", async (req, res) => {
   try {
     const { question, videoId } = req.body;
 
+
+    // Handle general questions without RAG
+    if (!videoId) {
+      const response = await withRetry(() =>
+        ai.models.generateContent({
+          model: "gemini-3.8-flash",
+          contents: question,
+        })
+      );
+
+      return res.json({
+        answer: response.text,
+      });
+    }
+
+    
     // 1. Embed the question
     // Retry Gemini embedding failures
     const embeddingResponse = await withRetry(() =>
@@ -327,20 +343,29 @@ app.post("/api/chat", async (req, res) => {
       .join("\n\n");
 
     // 3. Ask Gemini using retrieved context
+    
     const prompt = `
-You are an assistant that answers questions about a YouTube video.
+    You are a helpful AI assistant that can answer both general
+    questions and questions about a YouTube video.
 
-Use ONLY the transcript context provided below.
+    You have access to transcript context from the selected video.
 
-If the answer is not present in the context, say:
-"I couldn't find that information in the video."
+    Instructions:
+    - If the user asks about the video, answer using the transcript context.
+    - If the answer is not present in the transcript, say that
+      you couldn't find that information in the video.
+    - If the user asks a general knowledge question, answer using
+      your general knowledge.
+    - For greetings and casual conversation, respond naturally.
+    - If relevant, connect general explanations to the video,
+      but do not invent details about the video.
 
-Transcript context:
-${context}
+    Transcript context:
+    ${context}
 
-Question:
-${question}
-`;
+    User question:
+    ${question}
+    `;
 
     
     const response = await withRetry(() =>
