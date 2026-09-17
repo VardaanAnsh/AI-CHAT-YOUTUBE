@@ -36,6 +36,43 @@ async function fetchVideoTitle(youtubeUrl) {
   return data.title;
 }
 
+
+function extractVideoId(youtubeUrl) {
+  try {
+    const url = new URL(youtubeUrl);
+
+    // Standard YouTube URL
+    if (
+      url.hostname === "www.youtube.com" ||
+      url.hostname === "youtube.com"
+    ) {
+      if (url.pathname === "/watch") {
+        return url.searchParams.get("v");
+      }
+
+      // Shorts URL
+      if (url.pathname.startsWith("/shorts/")) {
+        return url.pathname.split("/")[2] || null;
+      }
+
+      // Embed URL
+      if (url.pathname.startsWith("/embed/")) {
+        return url.pathname.split("/")[2] || null;
+      }
+    }
+
+    // Shortened YouTube URL
+    if (url.hostname === "youtu.be") {
+      return url.pathname.slice(1).split("/")[0] || null;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+
 //api-endpoints
 // I separated video-level metadata from transcript chunks.
 // The videos table stores one record per YouTube video,
@@ -54,8 +91,7 @@ app.post("/api/video", async (req, res) => {
       });
     }
 
-    const parsedUrl = new URL(youtubeUrl);
-    const videoId = parsedUrl.searchParams.get("v");
+    const videoId = extractVideoId(youtubeUrl);
 
     if (!videoId) {
       return res.status(400).json({
@@ -76,12 +112,6 @@ app.post("/api/video", async (req, res) => {
       });
     }
     const title = await fetchVideoTitle(youtubeUrl);
-
-    if (!videoId) {
-      return res.status(400).json({
-        error: "Invalid YouTube URL",
-      });
-    }
 
     const transcript = await fetchTranscript(videoId);
 
